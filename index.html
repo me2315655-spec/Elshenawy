@@ -44,7 +44,9 @@ small{color:var(--mu)}h3{margin:4px 0 10px}
 /* ===== إعدادات التطبيق (غيّرها قبل الرفع) ===== */
 var FB='https://elshenawy-store-ffb3d-default-rtdb.firebaseio.com';            // رابط Firebase Realtime Database مثال: https://xxxx-default-rtdb.firebaseio.com
 var NTFY='es-admin-a6163e2faa59006f'; // اسم قناة إشعارات المدير في تطبيق ntfy (لا تشاركه)
-var ADM='Admin@123';  // كلمة مرور المدير (اسم المستخدم admin)
+var ADM='Admin@123';
+var API_KEY='AIzaSyB7el_4SzBEvOeeiCt1B7s0DK-ESY6icRM'; // مفتاح مشروع Firebase (ليس سراً)
+var ADMIN_EMAIL='admin@elshenawy-store.app'; // بريد حساب المدير في Firebase Authentication  // كلمة مرور المدير (اسم المستخدم admin)
 /* ================================================ */
 FB=FB.replace(/\/+$/,'');
 var LK='es3',CATS={offers:'🔥 العروض',grocery:'🛒 البقالة',sweets:'🍫 الحلويات',chips:'🥔 الشيبسي',clean:'🧼 المنظفات',ramadan:'🌙 رمضان',eid:'🎉 العيد'},CI={offers:'🔥',grocery:'🛒',chips:'🥔',sweets:'🍫',clean:'🧼',all:'📋',ramadan:'🌙',eid:'🎉'},CN={offers:'العروض',grocery:'البقالة',chips:'الشيبسي',sweets:'الحلويات',clean:'المنظفات',all:'عرض الكل',ramadan:'رمضان',eid:'العيد'};
@@ -76,11 +78,19 @@ function seed(){return[]}
 /* ===== البيانات والمزامنة ===== */
 function fromRemote(d){d=d||{};var o={cfg:Object.assign(defCfg(),d.cfg||{})};
 COLS.forEach(c=>{var a=d[c]?Object.keys(d[c]).map(k=>d[c][k]).filter(Boolean):[];a.sort((x,y)=>x.id-y.id);if(DESC[c])a.reverse();o[c]=a});return o}
-function snapDB(){var m={};COLS.forEach(c=>DB[c].forEach(r=>{m[c+'/'+r.id]=JSON.stringify(r)}));m.cfg=JSON.stringify(DB.cfg);return m}
-async function save(){var n=snapDB(),u={},ch=0,k;for(k in n)if(SNAP[k]!==n[k]){u[k]=JSON.parse(n[k]);ch=1}for(k in SNAP)if(!(k in n)){u[k]=null;ch=1}SNAP=n;if(!ch)return;
-if(FB){try{await fetch(FB+'/.json',{method:'PATCH',body:JSON.stringify(u)})}catch(e){toast('تعذر الاتصال بالإنترنت')}}else{try{localStorage.setItem(LK,JSON.stringify(DB))}catch(e){toast('المساحة ممتلئة')}}}
+var PUBC=['products','cfg','users','orders','deposits','notifs','chat','codes','alsent'],TOK=null;
+function tokLoad(){try{TOK=JSON.parse(localStorage.getItem('es_tok')||'null')}catch(e){TOK=null}}
+function tokSet(j,rt,id,exp,uid){TOK={id:id,rt:rt,exp:Date.now()+(+exp-60)*1000,uid:uid};try{localStorage.setItem('es_tok',JSON.stringify(TOK))}catch(e){}}
+async function authSign(email,pw){var r=await fetch('https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key='+API_KEY,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email,password:pw,returnSecureToken:true})}),j=await r.json();if(j.error)throw new Error(j.error.message);tokSet(j,j.refreshToken,j.idToken,j.expiresIn,j.localId);return TOK}
+async function tok(){if(!TOK)return'';if(Date.now()>TOK.exp){try{var r=await fetch('https://securetoken.googleapis.com/v1/token?key='+API_KEY,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'grant_type=refresh_token&refresh_token='+encodeURIComponent(TOK.rt)}),j=await r.json();if(j.error)throw 0;tokSet(j,j.refresh_token,j.id_token,j.expires_in,j.user_id)}catch(e){TOK=null;try{localStorage.removeItem('es_tok')}catch(x){}return''}}return TOK.id}
+async function fu(path,opt){var t=await tok();return fetch(FB+path+(t?(path.indexOf('?')>=0?'&':'?')+'auth='+t:''),opt)}
+function flat(v,p,o){if(v!==null&&typeof v=='object'){Object.keys(v).forEach(k=>flat(v[k],p+'/'+k,o))}else if(v!==undefined)o[p]=v}
+function snapDB(){var m={};COLS.forEach(c=>DB[c].forEach(r=>flat(r,c+'/'+r.id,m)));flat(DB.cfg,'cfg',m);return m}
+async function save(){var n=snapDB(),u={},ch=0,k;for(k in n)if(SNAP[k]!==n[k]){u[k]=n[k];ch=1}for(k in SNAP)if(!(k in n)){u[k]=null;ch=1}SNAP=n;if(!ch)return;
+if(FB){try{var r=await fu('/.json',{method:'PATCH',body:JSON.stringify(u)});if(!r.ok)throw 0}catch(e){toast('تعذر حفظ البيانات، تأكد من الاتصال')}}else{try{localStorage.setItem(LK,JSON.stringify(DB))}catch(e){toast('المساحة ممتلئة')}}}
+async function pullPub(){var ac=new AbortController(),tmo=setTimeout(()=>ac.abort(),12000),o={};await Promise.all(PUBC.map(async c=>{var r=await fu('/'+c+'.json',{signal:ac.signal});if(!r.ok)throw new Error(c);o[c]=await r.json()}));clearTimeout(tmo);return o}
 async function pull(q){var d=null;
-try{if(FB){var ac=new AbortController(),tmo=setTimeout(()=>ac.abort(),12000);d=await (await fetch(FB+'/.json',{signal:ac.signal})).json();clearTimeout(tmo)}else{var s=localStorage.getItem(LK);if(s){DB=JSON.parse(s);DB.cfg=Object.assign(defCfg(),DB.cfg);COLS.forEach(c=>{if(!DB[c])DB[c]=[]});SNAP=snapDB();return 1}}}
+try{if(FB){if(SESS=='admin'){var ac=new AbortController(),tmo=setTimeout(()=>ac.abort(),12000),r=await fu('/.json',{signal:ac.signal});if(!r.ok)throw new Error('root');d=await r.json();clearTimeout(tmo)}else d=await pullPub()}else{var s=localStorage.getItem(LK);if(s){DB=JSON.parse(s);DB.cfg=Object.assign(defCfg(),DB.cfg);COLS.forEach(c=>{if(!DB[c])DB[c]=[]});SNAP=snapDB();return 1}}}
 catch(e){if(!DB)DB=fromRemote(null);if(!q)toast('تعذر الاتصال بقاعدة البيانات');if(!DB.products.length)DB.products=seed();SNAP=snapDB();return 0}
 DB=fromRemote(d);SNAP=snapDB();if(!DB.products.length){DB.products=seed();await save()}return 1}
 var SWR=null;
@@ -93,10 +103,10 @@ if(k=='a'){cur={o:mx(DB.orders),d:mx(DB.deposits.filter(x=>x.st=='pending')),c:m
 else{var ns=DB.notifs.filter(n=>n.uid==k);cur={n:mx(ns)};if(p)ns.filter(n=>n.id>p.n).slice(0,3).forEach(n=>ms.push(n.t))}
 if(k=='a'){var al=alerts(),sn={};try{sn=JSON.parse(localStorage.getItem('es_al')||'{}')}catch(e){}al.filter(a=>!sn[a.k]).forEach(a=>{sn[a.k]=1;ms.push(a.t)});try{localStorage.setItem('es_al',JSON.stringify(sn))}catch(e){}}
 LN[k]=cur;try{localStorage.setItem('es_ln',JSON.stringify(LN))}catch(e){}ms.forEach(t=>pushN('Elshenawy Store',t))}
-async function poll(){if(!FB)return;var o=JSON.stringify(snapDB());await pull(1);if(!SESS){var t=localStorage.getItem('es_sess');if(t=='admin'||DB.users.some(u=>u.id==t))SESS=t}chkN();sweep();var a=document.activeElement;
+async function poll(){if(!FB)return;var o=JSON.stringify(snapDB());await pull(1);if(!SESS){var t=localStorage.getItem('es_sess');if(t&&t!='admin'&&DB.users.some(u=>u.id==t))SESS=t}chkN();sweep();var a=document.activeElement;
 if(!document.hidden&&JSON.stringify(snapDB())!=o&&!S.m&&!$('mdl')&&!(a&&/INPUT|TEXTAREA|SELECT/.test(a.tagName)))R()}
-function putImg(d){var id='i'+nid();IMG[id]=d;if(FB)fetch(FB+'/img/'+id+'.json',{method:'PUT',body:JSON.stringify(d)}).catch(()=>toast('تعذر رفع الصورة'));else{try{localStorage.setItem('im_'+id,d)}catch(e){}}return id}
-async function fillImgs(){document.querySelectorAll('img[data-i]').forEach(async el=>{var id=el.dataset.i,d=IMG[id];el.removeAttribute('data-i');if(!d){try{d=FB?await (await fetch(FB+'/img/'+id+'.json')).json():localStorage.getItem('im_'+id)}catch(e){}IMG[id]=d}if(d)el.src=d})}
+function putImg(d){var id='i'+nid();IMG[id]=d;if(FB)fu('/img/'+id+'.json',{method:'PUT',body:JSON.stringify(d)}).catch(()=>toast('تعذر رفع الصورة'));else{try{localStorage.setItem('im_'+id,d)}catch(e){}}return id}
+async function fillImgs(){document.querySelectorAll('img[data-i]').forEach(async el=>{var id=el.dataset.i,d=IMG[id];el.removeAttribute('data-i');if(!d){try{d=FB?await (await fu('/img/'+id+'.json')).json():localStorage.getItem('im_'+id)}catch(e){}IMG[id]=d}if(d)el.src=d})}
 function img(f,cb,mx){var r=new FileReader();r.onload=()=>{var i=new Image();i.onload=()=>{var k=Math.min(1,(mx||600)/Math.max(i.width,i.height)),c=document.createElement('canvas');c.width=i.width*k;c.height=i.height*k;c.getContext('2d').drawImage(i,0,0,c.width,c.height);cb(c.toDataURL('image/jpeg',.55))};i.src=r.result};r.readAsDataURL(f)}
 function ig(id,cls){return id?`<img class="${cls||'shot'}" data-i="${id}">`:''}
 function loadCart(){try{CART=JSON.parse(localStorage.getItem('es_cart'))||{}}catch(e){CART={}}}
@@ -108,7 +118,7 @@ function modal(h){closeM();var m=document.createElement('div');m.className='moda
 function closeM(){var m=$('mdl');if(m)m.remove()}
 function go(m){S.m=m;if(m=='reg')S.rt='c';R()}
 function lo(){modal(`<h3>تسجيل الخروج</h3><p>هل أنت متأكد أنك تريد الخروج؟</p><div class="row"><button class="no grow" onclick="logout()">تأكيد الخروج</button><button class="g grow" onclick="closeM()">إلغاء</button></div>`)}
-function logout(){closeM();sess(null);try{localStorage.removeItem('es_pin')}catch(e){}S.m=0;S.tab='home';R()}
+function logout(){closeM();sess(null);TOK=null;try{localStorage.removeItem('es_tok');localStorage.removeItem('es_legacy')}catch(e){}pull(1);try{localStorage.removeItem('es_pin')}catch(e){}S.m=0;S.tab='home';R()}
 
 /* ===== العنوان ===== */
 function tg(p){var g=$(p+'m').value=='gps';$(p+'x').style.display=g?'none':'block';$(p+'g').style.display=g?'block':'none'}
@@ -121,10 +131,12 @@ function adt(a){return a?(a.m=='gps'?`<a target="_blank" href="https://maps.goog
 
 /* ===== الدخول والتسجيل ===== */
 function hd(){return'<div class="card hero"><div class="logo">Elshenawy <span>Store</span></div></div>'}
-function bk(){return'<p><a href="#" onclick="go(0);return false">رجوع للمتجر</a></p>'}
+function bk(){return'<p><a href="#" onclick="go(0);return false">رجوع للمتجر</a> · <a href="privacy.html" target="_blank">سياسة الخصوصية</a></p>'}
 function cth(){return`<small>أكواد التحقق متاحة من ${hl(DB.cfg.ch[0])} إلى ${hl(DB.cfg.ch[1])}</small>`}
 function authView(){var m=S.m;
 if(m=='pin')return hd()+`<div class="card"><h3>أهلاً بعودتك</h3><label>أدخل الـ PIN</label><input id="pn" type="password" inputmode="numeric" maxlength="6"><button style="width:100%" onclick="doPin()">دخول</button><p><a href="#" onclick="go('login');return false">الدخول بكلمة المرور</a> · <a href="#" onclick="go(0);return false">دخول كزائر</a></p></div>`;
+if(m=='del')return hd()+`<div class="card"><h3>🗑️ حذف الحساب</h3><p>اكتب رقم هاتفك وكلمة المرور لحذف حسابك وبياناتك الشخصية نهائياً. لا يمكن التراجع عن ذلك.</p><label>رقم الهاتف</label><input id="dp1" type="text" inputmode="text"><label>كلمة المرور</label><input id="dp2" type="password"><button class="no" style="width:100%" onclick="doDelWeb()">حذف حسابي نهائياً</button>${bk()}</div>`;
+if(m=='delok')return hd()+`<div class="card"><h3>✅ تم حذف حسابك</h3><p>تم حذف بياناتك الشخصية من التطبيق.</p>${bk()}</div>`;
 if(m=='ver')return hd()+`<div class="card"><h3>تحقق من رقمك</h3><p>سيرسل لك المدير كود تحقق على واتساب الرقم ${E(S.vp)}</p>${cth()}<input id="vc" inputmode="numeric" placeholder="الكود"><button style="width:100%" onclick="doVer()">تأكيد</button><button class="g" style="width:100%;margin-top:8px" onclick="reqCode(S.vp,'verify')">إعادة إرسال الكود (كل 3 دقائق)</button>${bk()}</div>`;
 if(m=='forgot')return hd()+`<div class="card"><h3>نسيت كلمة المرور</h3><label>رقم الهاتف المسجل</label><input id="fp" type="text" inputmode="text">${cth()}<button style="width:100%;margin-top:8px" onclick="reqReset()">طلب الكود</button>${bk()}</div>`;
 if(m=='reset')return hd()+`<div class="card"><h3>كلمة مرور جديدة</h3><small>اكتب الكود الذي أرسله لك المدير على واتساب</small><input id="rc" inputmode="numeric" placeholder="الكود"><label>كلمة المرور الجديدة</label><input id="nw" type="password" oninput="pwc(this.value)"><div id="pc1" style="color:var(--mu)">✔ 5 أحرف إنجليزية على الأقل</div><div id="pc2" style="color:var(--mu)">✔ رقمان على الأقل</div><label>تأكيد كلمة المرور</label><input id="nw2" type="password"><button style="width:100%" onclick="doReset()">حفظ</button><button class="g" style="width:100%;margin-top:8px" onclick="reqCode(S.vp,'reset')">إعادة إرسال الكود</button>${bk()}</div>`;
@@ -142,7 +154,7 @@ var ad=rdA('r');if(!ad)return;await pull();if(DB.users.some(u=>u.phone==p))retur
 var u={id:nid(),fn:fn,ln:ln,name:fn+' '+ln,phone:p,type:S.rt||'c',pw:await H(w),bal:0,pts:0,photo:'',ok:true,addr:ad};DB.users.push(u);notify(u.id,'أهلاً بك في Elshenawy Store 🎉');await save();sess(u.id);S.m=0;S.tab=S.next||'home';S.next=0;R()}
 async function doVer(){await pull();var c=DB.codes.find(x=>x.p==S.vp&&x.t=='verify'),u=DB.users.find(x=>x.phone==S.vp);if(!u)return toast('الحساب غير موجود');if(!c||V('vc')!=c.c)return toast('الكود غير صحيح');
 u.ok=true;DB.codes=DB.codes.filter(x=>x!=c);notify(u.id,'أهلاً بك في Elshenawy Store 🎉');await save();sess(u.id);S.m=0;S.tab=S.next||'home';S.next=0;R()}
-async function doLogin(){var p=V('lp'),w=$('lw').value;if(p=='admin'&&w==ADM){sess('admin');S.m=0;return R()}
+async function doLogin(){var p=V('lp'),w=$('lw').value;if(p=='admin'){try{await authSign(ADMIN_EMAIL,w);try{localStorage.removeItem('es_legacy')}catch(x){}sess('admin');await pull();S.m=0;return R()}catch(e){if(ADM&&w==ADM){try{localStorage.setItem('es_legacy','1')}catch(x){}sess('admin');await pull();S.m=0;return R()}return toast('بيانات دخول المدير غير صحيحة')}}
 await pull();var h=await H(w),u=DB.users.find(x=>x.phone==p&&x.pw==h);if(!u)return toast('بيانات الدخول غير صحيحة');
 sess(u.id);S.m=0;S.tab=S.next||'home';S.next=0;R()}
 async function reqReset(){var p=V('fp');await pull();if(!DB.users.some(u=>u.phone==p))return toast('الرقم غير مسجل');S.vp=p;await reqCode(p,'reset');S.m='reset';R()}
@@ -215,7 +227,7 @@ if(t=='cart')h+=cartV(u);
 if(t=='orders'){var L=DB.orders.filter(o=>o.uid==u.id).slice().reverse();h+='<h3>🧾 طلباتي</h3>'+(L.length?L.map(trk).join(''):'<div class="card">لا توجد طلبات بعد</div>')}
 if(t=='deps'){var ds=DB.deposits.filter(d=>d.uid==u.id);h+='<div class="row sp"><h3>💳 الإيداعات</h3><button onclick="depM()">+ إيداع جديد</button></div>'+(ds.length?ds.map(depCard).join(''):'<div class="card">لا توجد طلبات إيداع</div>')}
 if(t=='notifs'){h+='<h3>الإشعارات</h3>'+(un.length?un.map(n=>`<div class="card">${E(n.t)}<br><small>${n.d}</small></div>`).join(''):'<div class="card">لا توجد إشعارات</div>');if(unread){un.forEach(n=>n.r=1);save()}}
-if(t=='set')h+=`<div class="card"><h3>الإعدادات</h3><div class="row">${u.photo?ig(u.photo,'av'):'<div class="av">👤</div>'}<input type="file" accept="image/*" class="grow" onchange="setPh(this)"></div><div class="row"><div class="grow"><label>الاسم الأول</label><input id="sn1" value="${E(u.fn)}"></div><div class="grow"><label>الاسم الأخير</label><input id="sn2" value="${E(u.ln)}"></div></div><label>رقم الهاتف</label><input id="sp" value="${E(u.phone)}"><button style="width:100%" onclick="saveSet()">حفظ التعديلات</button></div><div class="card"><h3>عنوان التوصيل</h3>${af(u.addr,'e')}<button style="width:100%" onclick="saveAd()">حفظ العنوان</button></div><div class="card"><h3>🔐 الدخول السريع (PIN) على هذا الجهاز</h3><small>${localStorage.getItem('es_pin')?'مفعّل':'غير مفعّل'}</small><input id="np" type="password" inputmode="numeric" maxlength="6" placeholder="4 إلى 6 أرقام"><div class="row"><button class="grow" onclick="savePin()">حفظ PIN</button><button class="g" onclick="rmPin()">إلغاء</button></div></div>`;
+if(t=='set')h+=`<div class="card"><h3>الإعدادات</h3><div class="row">${u.photo?ig(u.photo,'av'):'<div class="av">👤</div>'}<input type="file" accept="image/*" class="grow" onchange="setPh(this)"></div><div class="row"><div class="grow"><label>الاسم الأول</label><input id="sn1" value="${E(u.fn)}"></div><div class="grow"><label>الاسم الأخير</label><input id="sn2" value="${E(u.ln)}"></div></div><label>رقم الهاتف</label><input id="sp" value="${E(u.phone)}"><button style="width:100%" onclick="saveSet()">حفظ التعديلات</button></div><div class="card"><h3>عنوان التوصيل</h3>${af(u.addr,'e')}<button style="width:100%" onclick="saveAd()">حفظ العنوان</button></div><div class="card"><h3>🔐 الدخول السريع (PIN) على هذا الجهاز</h3><small>${localStorage.getItem('es_pin')?'مفعّل':'غير مفعّل'}</small><input id="np" type="password" inputmode="numeric" maxlength="6" placeholder="4 إلى 6 أرقام"><div class="row"><button class="grow" onclick="savePin()">حفظ PIN</button><button class="g" onclick="rmPin()">إلغاء</button></div></div><div class="card"><h3>🗑️ حذف الحساب</h3><small>يحذف بياناتك الشخصية (الاسم، الهاتف، العنوان، الصور، الرسائل) نهائياً.</small><br><button class="no" style="width:100%;margin-top:8px" onclick="delAcc()">حذف حسابي</button><p><a href="privacy.html" target="_blank">سياسة الخصوصية</a></p></div>`;
 if(t=='help'){var ms=DB.chat.filter(m=>m.uid==u.id);h+=`<div class="card"><h3>💬 خدمة العملاء</h3><div class="chat">${ms.length?ms.map(m=>`<div class="bub ${m.f=='u'?'mine':''}">${E(m.t)}<br><small>${m.d}</small></div>`).join(''):'<small>ابدأ المحادثة بكتابة رسالتك</small>'}</div><div class="row"><input id="mg" class="grow" placeholder="اكتب رسالة..."><button onclick="sendMsg()">إرسال</button></div></div>`}
 var N=u?[['home','🏠','الرئيسية'],['cart','🛒','سلة'+(cn?` <span class="bd">(${cn})</span>`:'')],['orders','🧾','طلباتي'],['deps','💳','إيداع'],['notifs','🔔','إشعارات'+(unread?` <span class="bd">(${unread})</span>`:'')],['set','⚙️','إعدادات'],['help','💬','دعم']]:[['home','🏠','الرئيسية'],['cart','🛒','سلة'+(cn?` <span class="bd">(${cn})</span>`:'')]];
 return h+'<div class="nav">'+N.map(x=>`<button class="${t==x[0]?'on':''}" onclick="S.tab='${x[0]}';S.pd=0;${x[0]=='home'?'S.cat=0;':''}R()"><div style="font-size:19px">${x[1]}</div>${x[2]}</button>`).join('')+(u?'<button onclick="lo()"><div style="font-size:19px">🚪</div>خروج</button>':'<button onclick="go(\'login\')"><div style="font-size:19px">👤</div>دخول</button>')+'</div>'}
@@ -379,9 +391,17 @@ vtake(x,l.q);tot+=l.q*l.pr;cst+=l.q*x.c;its.push({id:l.k,n:x.n,q:l.q,pr:l.pr,c:x
 DB.rsales.unshift({id:nid(),ts:Date.now(),d:now(),items:its,total:rn(tot),cost:rn(cst)});S.rs={items:[]};await save();toast('تم البيع ✅ '+m2(tot)+' ج.م');R()}
 async function rsDel(id){await pull();var v=DB.rsales.find(x=>x.id==id);if(!v)return;v.items.forEach(i=>{var x=vr(i.id);if(x)vgive(x,i.q)});DB.rsales=DB.rsales.filter(x=>x.id!=id);await save();toast('تم الإلغاء');R()}
 
+async function wipe(u){DB.users=DB.users.filter(x=>x.id!=u.id);DB.notifs=DB.notifs.filter(n=>n.uid!=u.id);DB.chat=DB.chat.filter(m=>m.uid!=u.id);DB.codes=DB.codes.filter(c=>c.p!=u.phone);
+var im=[u.photo];DB.deposits.filter(d=>d.uid==u.id).forEach(d=>im.push(d.img));DB.deposits=DB.deposits.filter(d=>d.uid!=u.id);
+DB.orders.forEach(o=>{if(o.uid==u.id){o.uid=0;o.name='حساب محذوف';o.phone='';o.addr=0}});
+im.filter(Boolean).forEach(i=>{if(FB)fu('/img/'+i+'.json',{method:'DELETE'}).catch(()=>{});else try{localStorage.removeItem('im_'+i)}catch(e){}});await save()}
+function delAcc(){modal(`<h3>حذف الحساب</h3><p>سيتم حذف حسابك وبياناتك الشخصية نهائياً ولا يمكن التراجع.</p><label>اكتب كلمة المرور للتأكيد</label><input id="dpw" type="password"><div class="row"><button class="no grow" onclick="doDel()">حذف نهائي</button><button class="g grow" onclick="closeM()">إلغاء</button></div>`)}
+async function doDel(){await pull();var u=me(),h=await H($('dpw').value);if(!u||u.pw!=h)return toast('كلمة المرور غير صحيحة');await wipe(u);closeM();try{localStorage.removeItem('es_pin')}catch(e){}sess(null);S.m=0;S.tab='home';toast('تم حذف حسابك نهائياً');R()}
+async function doDelWeb(){var p=V('dp1'),w=$('dp2').value;await pull();var h=await H(w),u=DB.users.find(x=>x.phone==p&&x.pw==h);if(!u)return toast('بيانات غير صحيحة');await wipe(u);if(SESS==u.id)sess(null);S.m='delok';R()}
+
 function R(){var a=$('app');a.innerHTML=SESS=='admin'?admView():S.m?authView():custView();fillImgs();if(S.pd&&SESS!='admin')ptot();var c=document.querySelector('.chat');if(c)c.scrollTop=c.scrollHeight}
-(async function(){loadCart();await pull();try{var t=localStorage.getItem('es_sess');if(t=='admin'||DB.users.some(u=>u.id==t))SESS=t;if(SESS&&SESS!='admin'){var j=JSON.parse(localStorage.getItem('es_pin')||'null');if(j&&j.u==SESS)S.m='pin'}}catch(e){}
-try{if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').then(r=>{SWR=r}).catch(()=>{})}catch(e){}R();chkN();sweep();setInterval(poll,8000);setTimeout(()=>{var x=$('spl');if(x){x.style.opacity=0;setTimeout(()=>x.remove(),700)}},1300)})();
+(async function(){loadCart();tokLoad();try{if(localStorage.getItem('es_sess')=='admin'&&(await tok()||(ADM&&localStorage.getItem('es_legacy')=='1')))SESS='admin'}catch(e){}await pull();try{var t=localStorage.getItem('es_sess');if(t&&t!='admin'&&DB.users.some(u=>u.id==t))SESS=t;if(SESS&&SESS!='admin'){var j=JSON.parse(localStorage.getItem('es_pin')||'null');if(j&&j.u==SESS)S.m='pin'}}catch(e){}
+try{if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').then(r=>{SWR=r}).catch(()=>{})}catch(e){}if(location.hash=='#delete-account')S.m='del';R();chkN();sweep();setInterval(poll,8000);setTimeout(()=>{var x=$('spl');if(x){x.style.opacity=0;setTimeout(()=>x.remove(),700)}},1300)})();
 async function resume(){await pull(1);chkN();sweep();var a=document.activeElement;if(!S.m&&!$('mdl')&&!(a&&/INPUT|TEXTAREA|SELECT/.test(a.tagName)))R()}
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)resume()});window.addEventListener('online',resume);
 </script></body></html>
